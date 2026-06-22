@@ -106,6 +106,7 @@ canvas { display:block; }
     <div class="dock-slot active" id="slot-0" onclick="switchWeapon(0)"><span>[1]</span>RIFLE</div>
     <div class="dock-slot" id="slot-1" onclick="switchWeapon(1)"><span>[2]</span>SHOTGUN</div>
     <div class="dock-slot" id="slot-2" onclick="switchWeapon(2)"><span>[3]</span>RAILGUN</div>
+    <div class="dock-slot" id="slot-3" onclick="switchWeapon(3)"><span>[4]</span>SNIPER</div>
   </div>
 
   <div id="health-panel" class="hud-panel">
@@ -130,7 +131,7 @@ canvas { display:block; }
       <strong>WASD</strong> - MOVE | <strong>MOUSE</strong> - LOOK AROUND<br>
       <strong>LEFT CLICK</strong> - SHOOT | <strong>RIGHT CLICK</strong> - HOLD TO ZOOM / SCOPE<br>
       <strong>SPACEBAR</strong> - JUMP | <strong>SHIFT</strong> - SPRINT RUN<br>
-      <strong>1, 2, 3</strong> - CHOOSE WEAPONS | <strong>R</strong> - RELOAD AMMO
+      <strong>1, 2, 3, 4</strong> - CHOOSE WEAPONS | <strong>R</strong> - RELOAD AMMO
     </div>
   </div>
 </div>
@@ -154,7 +155,8 @@ const WORLD_SIZE = 100;
 const WEAPONS = [
   { name: 'Pulse Rifle', ammo: 30, max: 30, fireRate: 140, damage: 16, color: 0x2ed573, type: 'rifle', modelColor: 0x2ed573 },
   { name: 'Shotgun', ammo: 8, max: 8, fireRate: 750, damage: 14, pellets: 8, spread: 0.16, color: 0xffa502, type: 'shotgun', modelColor: 0xffa502 },
-  { name: 'Railgun', ammo: 5, max: 5, fireRate: 1100, damage: 120, color: 0xff4757, piercing: true, type: 'railgun', modelColor: 0xff4757 }
+  { name: 'Railgun', ammo: 5, max: 5, fireRate: 1100, damage: 120, color: 0xff4757, piercing: true, type: 'railgun', modelColor: 0xff4757 },
+  { name: 'Sniper', ammo: 10, max: 10, fireRate: 1400, damage: 200, color: 0x74b9ff, piercing: true, type: 'sniper', modelColor: 0x74b9ff, scopeFOV: 18, spread: 0.0 }
 ];
 
 const ENEMY_TYPES = {
@@ -174,6 +176,7 @@ const AudioEngine = {
         case 'rifle': this.noise(0.1, 400, 80, 'sawtooth', 0.15); break;
         case 'shotgun': this.noise(0.2, 250, 40, 'triangle', 0.3); this.noise(0.15, 600, 200, 'sawtooth', 0.1); break;
         case 'railgun': this.noise(0.4, 800, 100, 'sine', 0.3); this.noise(0.3, 1200, 50, 'sawtooth', 0.15); break;
+        case 'sniper': this.noise(0.6, 1800, 60, 'sawtooth', 0.5); this.noise(0.4, 900, 40, 'sine', 0.3); break;
         case 'hit': this.tone(80, 140, 0.05, 'triangle', 0.2); break;
         case 'kill': this.tone(180, 60, 0.15, 'sawtooth', 0.15); break;
         case 'reload': this.tone(400, 600, 0.08, 'sine', 0.1); setTimeout(() => this.tone(500, 300, 0.08, 'sine', 0.1), 100); break;
@@ -295,6 +298,7 @@ function init() {
     if (e.code === 'Digit1') switchWeapon(0);
     if (e.code === 'Digit2') switchWeapon(1);
     if (e.code === 'Digit3') switchWeapon(2);
+    if (e.code === 'Digit4') switchWeapon(3);
     if (e.code === 'KeyR') reload();
     if (e.code === 'Space') jump();
   });
@@ -333,11 +337,25 @@ function buildWeaponMesh() {
   body.position.set(0.24, -0.15, -0.6);
   gunMesh.add(body);
 
+  // Sniper gets a longer barrel
+  const barrelLength = currentWep.type === 'sniper' ? 0.75 : 0.4;
   const barrelMat = new THREE.MeshStandardMaterial({ color: 0x777777, metalness: 0.9, roughness: 0.15 });
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.4), barrelMat);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, barrelLength), barrelMat);
   barrel.rotation.x = Math.PI / 2;
-  barrel.position.set(0.24, -0.11, -0.8);
+  barrel.position.set(0.24, -0.11, -0.6 - barrelLength / 2);
   gunMesh.add(barrel);
+
+  // Sniper scope on top
+  if (currentWep.type === 'sniper') {
+    const scopeMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.8, roughness: 0.2 });
+    const scopeBody = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.28), scopeMat);
+    scopeBody.rotation.x = Math.PI / 2;
+    scopeBody.position.set(0.24, -0.07, -0.6);
+    gunMesh.add(scopeBody);
+    const scopeLens = new THREE.Mesh(new THREE.CircleGeometry(0.035, 16), new THREE.MeshBasicMaterial({ color: currentWep.modelColor }));
+    scopeLens.position.set(0.24, -0.07, -0.75);
+    gunMesh.add(scopeLens);
+  }
 
   const glowMat = new THREE.MeshBasicMaterial({ color: currentWep.modelColor });
   const glowCore = new THREE.Mesh(new THREE.BoxGeometry(0.086, 0.03, 0.28), glowMat);
@@ -411,7 +429,13 @@ function startGame() {
 
 function setScopeState(state) {
   isScoped = state;
-  targetFOV = isScoped ? 38 : 75;
+  const w = WEAPONS[currentWeaponIdx];
+  // Sniper uses a much tighter FOV for its scope
+  if (isScoped) {
+    targetFOV = (w.scopeFOV !== undefined) ? w.scopeFOV : 38;
+  } else {
+    targetFOV = 75;
+  }
   const crosshair = document.getElementById('crosshair');
   if (isScoped) crosshair.classList.add('scoped');
   else crosshair.classList.remove('scoped');
@@ -507,7 +531,8 @@ function shoot() {
   updateHUD();
 
   const count = w.pellets || 1;
-  const currentSpread = isScoped ? (w.spread * 0.35) : w.spread; 
+  // Sniper has zero spread; other weapons use their spread value
+  const currentSpread = isScoped ? (w.spread !== undefined ? w.spread * 0.35 : 0) : (w.spread || 0);
 
   for(let i=0; i<count; i++) {
     const dir = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
@@ -521,14 +546,14 @@ function shoot() {
     bullets.push({ 
       mesh: bMesh, 
       dir, 
-      speed: 7.5, 
+      speed: w.type === 'sniper' ? 14 : 7.5,
       damage: w.damage, 
       weapon: w, 
-      life: 300,
+      life: w.type === 'sniper' ? 600 : 300,
       lastPos: bMesh.position.clone() 
     });
   }
-  pitch += isScoped ? 0.004 : ((w.type === 'shotgun') ? 0.035 : 0.012);
+  pitch += isScoped ? 0.002 : ((w.type === 'shotgun') ? 0.035 : 0.012);
 }
 
 function reload() {
@@ -747,7 +772,12 @@ function updateRadar() {
 
 function onMouseMove(e) {
   if (document.pointerLockElement !== document.body) return;
-  const lookSensitivity = isScoped ? 0.0007 : 0.0018;
+  const w = WEAPONS[currentWeaponIdx];
+  // Sniper scoped sensitivity is tighter than other scoped weapons
+  let lookSensitivity;
+  if (isScoped && w.type === 'sniper') lookSensitivity = 0.0003;
+  else if (isScoped) lookSensitivity = 0.0007;
+  else lookSensitivity = 0.0018;
   yaw -= e.movementX * lookSensitivity; pitch -= e.movementY * lookSensitivity;
   pitch = Math.max(-Math.PI / 2.05, Math.min(Math.PI / 2.05, pitch));
 }
